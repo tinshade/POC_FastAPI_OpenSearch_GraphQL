@@ -7,9 +7,13 @@ from pydantic import EmailStr
 from typing import Optional
 from models.users.user import UserCreate, UserUpdate
 import aiohttp
+from services.users.user_service import UserService
 
 # Initialize Opensearch Instance
 opensearch_manager = OpenSearchManager()
+http_session:aiohttp.ClientSession = None
+
+
 @acm
 async def app_lifespan(app: FastAPI):
     # Pass control down to your custom manager
@@ -30,6 +34,46 @@ async def app_lifespan(app: FastAPI):
         
 # Initialize the server instance
 app = FastAPI(lifespan=app_lifespan)
+user_service = UserService(http_session)
+
+import strawberry
+from strawberry.fastapi import GraphQLRouter
+from typing import List, Optional
+
+
+@strawberry.type
+class UserMetadata:
+    phone: Optional[List[str]]
+    url: str
+
+@strawberry.type
+class User:
+    email: str
+    first_name: str
+    last_name: str
+    metadata: Optional[UserMetadata]
+
+
+@strawberry.type
+class Query:
+    @strawberry.field
+    async def user(email: str):
+        result = await fetch_users(email=email)
+        return User(**result["data"])
+
+
+@strawberry.mutation
+async def create_user(user: CreateUser):
+    await create_user(
+        UserCreate(**user.__dict__)
+    )
+    return True
+
+
+
+schema = strawberry.Schema(query=Query)
+graphql_app = GraphQLRouter(schema)
+
 
 @app.get("/")
 @app.get("/health")
@@ -38,21 +82,11 @@ def health_check():
     return {"status": 200, "message": "healthy"}
 
 @app.get("/users")
-async def fetch_users(email:EmailStr="", limit:int = 100, offset:int = 10):
-    base_url:str = f"{settings.OPENSEARCH_URL}/users/"
-    url:str = f"{base_url}_doc/{email}" if email else f"{base_url}_search?size={limit}&from={offset}"
-    data:dict = None
-    async with http_session.get(url) as resp:
-        if resp.status != 200:
-            raise HTTPException(status_code=resp.status, detail="Error while getting user details")
-        data = await resp.json()
-        if email:
-            data = data.get('_source')
-        else:
-            # Extracting the actual document sources from the search hits
-            hits = data.get('hits', {}).get('hits', [])
-            data = [hit['_source'] for hit in hits]
-    return {"message": "User data retrieved successfully!", "data": data}
+async def fetch_users(email: EmailStr = ""):
+    if email:
+        return await user_service.get_user(email)
+
+    return await user_service.get_users()
 
 @app.put("/users/update")
 async def update_users(email: EmailStr, user_update: UserUpdate):
@@ -92,6 +126,4 @@ async def delete_user(email:EmailStr):
             raise HTTPException(status_code=resp.status, detail=f"Something went wrong while deleting user with email {email}")
     return {}
 
-@app.get("/graphql")
-def graphql_endpoint():
-    return {}
+app.include_router(graphql_app, prefix="/graphql")

@@ -835,6 +835,7 @@ files = [
 ]
 
 [package.dependencies]
+aiohttp = {version = ">=3.12.14,<4", optional = true, markers = "extra == \"async\""}
 certifi = ">=2024.7.4"
 Events = "*"
 opensearch-protobufs = "1.2.0"
@@ -1445,4 +1446,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4"
-content-hash = "df865fa9dd94d05024a675eec2fad19717bbdc5e106fd47c281805e3ab248991"
+content-hash = "5bc22949404ef537ba5365591aef7985e5553c5fe10022c07676c0c9c100829b"

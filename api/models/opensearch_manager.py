@@ -3,7 +3,7 @@ from typing import List, Optional
 from contextlib import asynccontextmanager as acm
 from opensearchpy import AsyncOpenSearch
 from fastapi import FastAPI
-from ..config import settings 
+from config import settings
 
 
 
@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 
 class OpenSearchManager:
-
     def __init__(self):
         self.opensearch_client: Optional[AsyncOpenSearch] = None
 
@@ -35,7 +34,6 @@ class OpenSearchManager:
         for index in indices:
             if not await client.indices.exists(index=index):
                 await client.indices.create(index=index)
-        yield
 
     async def gracefully_shutdown_opensearch(self):
         # Safely close connection pool on shutdown
@@ -56,7 +54,7 @@ class OpenSearchManager:
         
         finally:
             logger.info("Shutting down OpenSearch connections...")
-            await gracefully_shutdown_opensearch()
+            await self.gracefully_shutdown_opensearch()
 
 
 

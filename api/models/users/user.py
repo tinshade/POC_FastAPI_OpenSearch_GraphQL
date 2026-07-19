@@ -17,6 +17,3 @@ class UserUpdate(BaseModel):
     first_name:Optional[str] = None
     last_name:Optional[str] = None
     metadata:Optional[UserMetadata] = None
-
-class UserDelete(BaseModel):
-    email:EmailStr

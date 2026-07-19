@@ -1,20 +1,32 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from config import settings
 from contextlib import asynccontextmanager as acm
 from models.opensearch_manager import OpenSearchManager
 from pydantic import EmailStr
 from typing import Optional
 from models.users.user import UserCreate, UserUpdate
-
+import aiohttp
 
 # Initialize Opensearch Instance
 opensearch_manager = OpenSearchManager()
 @acm
 async def app_lifespan(app: FastAPI):
     # Pass control down to your custom manager
-    async with opensearch_manager.opensearch_lifespan(app, settings.INDICES):
-        yield
+    global http_session
+    connector = aiohttp.TCPConnector(ssl=False)
+    http_session = aiohttp.ClientSession(connector=connector, auth=aiohttp.BasicAuth("admin", settings.OPENSEARCH_ADMIN_PASSWORD))
+
+    try:
+        # Check/Create Index manually via PUT request
+        async with http_session.get(f"{settings.OPENSEARCH_URL}/users") as resp:
+            if resp.status == 404:
+                await http_session.put(f"{settings.OPENSEARCH_URL}/users")
+        
+        async with opensearch_manager.opensearch_lifespan(app, settings.INDICES):
+            yield
+    finally:
+        await http_session.close()
         
 # Initialize the server instance
 app = FastAPI(lifespan=app_lifespan)
@@ -27,17 +39,18 @@ def health_check():
 
 @app.get("/users")
 async def fetch_users(email:EmailStr="", limit:int = 100, offset:int = 10):
-    base_url:str = f"{settings.OPENSEARCH_URL}/users"
+    base_url:str = f"{settings.OPENSEARCH_URL}/users/"
     url:str = f"{base_url}_doc/{email}" if email else f"{base_url}_search?size={limit}&from={offset}"
     data:dict = None
     async with http_session.get(url) as resp:
         if resp.status != 200:
             raise HTTPException(status_code=resp.status, detail="Error while getting user details")
+        data = await resp.json()
         if email:
-            data:dict = await resp.json()['_source']
+            data = data.get('_source')
         else:
             # Extracting the actual document sources from the search hits
-            hits = res_data.get('hits', {}).get('hits', [])
+            hits = data.get('hits', {}).get('hits', [])
             data = [hit['_source'] for hit in hits]
     return {"message": "User data retrieved successfully!", "data": data}
 
@@ -48,21 +61,26 @@ async def update_users(email: EmailStr, user_update: UserUpdate):
         raise HTTPException(status_code=400, detail="No parameters provided.")
         
     # OpenSearch update API format calls the _update route with a "doc" object
-    url = f"{OPENSEARCH_BASE}/users/_update/{email}?refresh=true"
+    url = f"{settings.OPENSEARCH_URL}/users/_update/{email}?refresh=true"
     payload = {"doc": update_data}
     
     async with http_session.post(url, json=payload) as resp:
         if resp.status != 200:
-            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+            raise HTTPException(status_code=resp.status, detail=resp.text)
     return {"message": "User updated successfully", "email": email}
 
-@app.post("/users/create")
+@app.post("/users/create", status_code=201)
 async def create_user(user: UserCreate):
-    print(user, "debugging")
-    return {}
     async with http_session.head(f"{settings.OPENSEARCH_URL}/users/_doc/{user.email}") as resp:
-        if resp.status != 200:
-            raise HTTPException(status_code=500, detail="Failed writing to cluster")
+        print(resp.status, resp.text)
+        if resp.status == 200:
+            raise HTTPException(status_code=500, detail="User already exists!")
+    
+    payload = user.model_dump(mode="json")
+    url = f"{settings.OPENSEARCH_URL}/users/_doc/{user.email}?refresh=true"
+    async with http_session.put(url, json=payload) as resp:
+        if resp.status not in (200, 201):
+            raise HTTPException(status_code=resp.status, detail=f"Something went wrong while creating user with email {user.email}")
 
     return {"message": "User created successfully", "email": user.email}
 
@@ -70,7 +88,7 @@ async def create_user(user: UserCreate):
 async def delete_user(email:EmailStr):
     url = f"{settings.OPENSEARCH_URL}/users/_doc/{email}?refresh=true"
     async with http_session.delete(url) as resp:
-        if resp.status in (200, 204):
+        if resp.status not in (200, 204):
             raise HTTPException(status_code=resp.status, detail=f"Something went wrong while deleting user with email {email}")
     return {}
 
